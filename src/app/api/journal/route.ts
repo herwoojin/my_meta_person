@@ -1,0 +1,106 @@
+// ============================================================
+// /api/journal — 일기 CRUD API
+// ============================================================
+
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAuth, isAuthError } from "@/lib/auth/verify";
+import { adminDb } from "@/lib/firebase/admin";
+
+// GET — 특정 날짜의 일기 조회
+export async function GET(req: NextRequest) {
+  const authResult = await verifyAuth(req);
+  if (isAuthError(authResult)) return authResult;
+  const { uid } = authResult;
+
+  const dateKey = req.nextUrl.searchParams.get("date");
+  if (!dateKey) {
+    return NextResponse.json(
+      { error: "날짜(date) 파라미터가 필요합니다." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const journalDoc = await adminDb
+      .doc(`users/${uid}/journals/${dateKey}`)
+      .get();
+
+    if (!journalDoc.exists) {
+      return NextResponse.json({ entries: [], mdSnapshot: "" });
+    }
+
+    const entriesSnap = await adminDb
+      .collection(`users/${uid}/journals/${dateKey}/entries`)
+      .orderBy("createdAt", "asc")
+      .get();
+
+    const entries = entriesSnap.docs.map((doc) => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    return NextResponse.json({
+      entries,
+      mdSnapshot: journalDoc.data()?.mdSnapshot ?? "",
+    });
+  } catch (error) {
+    console.error("[Journal] 조회 실패:", error);
+    return NextResponse.json(
+      { error: "일기 조회에 실패했습니다." },
+      { status: 500 }
+    );
+  }
+}
+
+// POST — 새로운 일기 항목 추가
+export async function POST(req: NextRequest) {
+  const authResult = await verifyAuth(req);
+  if (isAuthError(authResult)) return authResult;
+  const { uid } = authResult;
+
+  try {
+    const { dateKey, time, text, source } = await req.json();
+
+    if (!dateKey || !time || !text || !source) {
+      return NextResponse.json(
+        { error: "필수 데이터(dateKey, time, text, source)가 누락되었습니다." },
+        { status: 400 }
+      );
+    }
+
+    const journalRef = adminDb.doc(`users/${uid}/journals/${dateKey}`);
+    const entriesRef = journalRef.collection("entries");
+
+    // 엔트리 추가
+    const newEntryRef = entriesRef.doc();
+    await newEntryRef.set({
+      time,
+      text,
+      source,
+      createdAt: new Date().toISOString(),
+    });
+
+    // 전체 mdSnapshot 업데이트 (단순 연결)
+    const journalDoc = await journalRef.get();
+    let currentMd = journalDoc.exists ? (journalDoc.data()?.mdSnapshot ?? "") : "";
+    const newMdBlock = `## ${time}\n${text}\n\n`;
+    currentMd += newMdBlock;
+
+    await journalRef.set(
+      {
+        dateKey,
+        mdSnapshot: currentMd,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    return NextResponse.json({ success: true, id: newEntryRef.id });
+  } catch (error) {
+    console.error("[Journal] 저장 실패:", error);
+    return NextResponse.json(
+      { error: "일기 저장에 실패했습니다." },
+      { status: 500 }
+    );
+  }
+}
