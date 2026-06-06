@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   BookOpen,
+  History,
   MessageCircle,
   Settings,
   Sparkles,
@@ -21,6 +22,7 @@ import { useState } from "react";
 const navItems = [
   { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
   { href: "/journal", label: "음성 일기", icon: BookOpen },
+  { href: "/records", label: "기록", icon: History },
   { href: "/coach", label: "코칭", icon: MessageCircle },
   { href: "/settings", label: "설정", icon: Settings },
 ];
