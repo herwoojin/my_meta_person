@@ -106,6 +106,22 @@ export default function CoachPage() {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, coachMessage]);
+
+      // 대화 저장 (기록 페이지에서 모아보기) — 본인만 접근 가능 (rules)
+      if (fullContent) {
+        try {
+          const { getClientDb } = await import("@/lib/firebase/client");
+          const { collection, addDoc } = await import("firebase/firestore");
+          const db = getClientDb();
+          await addDoc(collection(db, "users", user.uid, "coachLogs"), {
+            query: userMessage.content,
+            answer: fullContent,
+            createdAt: new Date().toISOString(),
+          });
+        } catch (saveErr) {
+          console.error("코칭 기록 저장 실패:", saveErr);
+        }
+      }
     } catch (error) {
       console.error("코칭 오류:", error);
       const errorMsg =

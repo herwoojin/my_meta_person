@@ -42,6 +42,14 @@ export default function JournalPage() {
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // URL의 ?date=YYYY-MM-DD 가 있으면 해당 날짜로 시작 (기록 페이지에서 "열기")
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get("date");
+    if (param && /^\d{4}-\d{2}-\d{2}$/.test(param)) {
+      setDateKey(param);
+    }
+  }, []);
+
   // 일기 로드
   useEffect(() => {
     const fetchEntries = async () => {

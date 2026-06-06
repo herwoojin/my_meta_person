@@ -104,3 +104,36 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+// DELETE — 특정 날짜의 일기 전체 삭제 (?date=YYYY-MM-DD) — entries 서브컬렉션 포함
+export async function DELETE(req: NextRequest) {
+  const authResult = await verifyAuth(req);
+  if (isAuthError(authResult)) return authResult;
+  const { uid } = authResult;
+
+  const dateKey = req.nextUrl.searchParams.get("date");
+  if (!dateKey) {
+    return NextResponse.json(
+      { error: "날짜(date) 파라미터가 필요합니다." },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const journalRef = adminDb.doc(`users/${uid}/journals/${dateKey}`);
+    const entriesSnap = await journalRef.collection("entries").get();
+
+    const batch = adminDb.batch();
+    entriesSnap.docs.forEach((doc) => batch.delete(doc.ref));
+    batch.delete(journalRef);
+    await batch.commit();
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[Journal] 삭제 실패:", error);
+    return NextResponse.json(
+      { error: "일기 삭제에 실패했습니다." },
+      { status: 500 }
+    );
+  }
+}
