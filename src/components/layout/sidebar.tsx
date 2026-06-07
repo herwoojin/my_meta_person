@@ -24,6 +24,7 @@ const navItems = [
   { href: "/journal", label: "음성 일기", icon: BookOpen },
   { href: "/records", label: "기록", icon: History },
   { href: "/coach", label: "코칭", icon: MessageCircle },
+  { href: "/blog-reader", label: "블로그 읽기", icon: BookOpen },
   { href: "/settings", label: "설정", icon: Settings },
 ];
 
