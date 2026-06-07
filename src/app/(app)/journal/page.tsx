@@ -107,7 +107,14 @@ export default function JournalPage() {
 
       mediaRecorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const webmBlob = new Blob(chunksRef.current, { type: "audio/webm" });
+        // Gemini는 webm을 지원하지 않으므로 WAV로 변환해 전송
+        let blob = webmBlob;
+        try {
+          blob = await blobToWav(webmBlob);
+        } catch (err) {
+          console.warn("WAV 변환 실패, 원본 전송:", err);
+        }
         await handleTranscribe(blob);
       };
 
@@ -143,7 +150,8 @@ export default function JournalPage() {
     try {
       const token = await user.getIdToken();
       const formData = new FormData();
-      formData.append("audio", blob, "recording.webm");
+      const ext = blob.type.includes("wav") ? "wav" : "webm";
+      formData.append("audio", blob, `recording.${ext}`);
       formData.append("dateKey", dateKey);
 
       const res = await fetch("/api/stt", {
@@ -162,7 +170,7 @@ export default function JournalPage() {
           }
           return;
         }
-        throw new Error(data?.error || "STT 변환 실패");
+        throw new Error(data?.detail || data?.error || "STT 변환 실패");
       }
 
       if (!data.text?.trim()) {
@@ -180,7 +188,12 @@ export default function JournalPage() {
       await saveEntry(newEntry.time, newEntry.text, newEntry.source);
     } catch (error) {
       console.error("변환 오류:", error);
-      alert("음성 변환에 실패했습니다. 잠시 후 다시 시도해주세요.");
+      const msg = error instanceof Error ? error.message : "";
+      alert(
+        msg
+          ? `음성 변환에 실패했습니다.\n(${msg})`
+          : "음성 변환에 실패했습니다. 잠시 후 다시 시도해주세요."
+      );
     } finally {
       setIsTranscribing(false);
     }
@@ -409,6 +422,78 @@ export default function JournalPage() {
       )}
     </div>
   );
+}
+
+// 녹음 blob(webm 등)을 Gemini 호환 WAV(16kHz mono PCM16)로 변환
+async function blobToWav(blob: Blob): Promise<Blob> {
+  const arrayBuf = await blob.arrayBuffer();
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
+  const ctx = new AudioCtx();
+  try {
+    const decoded = await ctx.decodeAudioData(arrayBuf);
+    const wav = encodeWav(decoded, 16000);
+    return new Blob([wav], { type: "audio/wav" });
+  } finally {
+    ctx.close();
+  }
+}
+
+// AudioBuffer → WAV(ArrayBuffer). 모노 믹스다운 + 지정 샘플레이트로 리샘플
+function encodeWav(buffer: AudioBuffer, targetRate: number): ArrayBuffer {
+  // 모노 믹스다운
+  const chs = buffer.numberOfChannels;
+  const src = buffer.getChannelData(0);
+  const mixed = new Float32Array(src.length);
+  mixed.set(src);
+  for (let c = 1; c < chs; c++) {
+    const data = buffer.getChannelData(c);
+    for (let i = 0; i < data.length; i++) mixed[i] += data[i];
+  }
+  if (chs > 1) for (let i = 0; i < mixed.length; i++) mixed[i] /= chs;
+
+  // 리샘플 (선형 보간)
+  const ratio = buffer.sampleRate / targetRate;
+  const outLen = Math.floor(mixed.length / ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const idx = i * ratio;
+    const lo = Math.floor(idx);
+    const hi = Math.min(lo + 1, mixed.length - 1);
+    out[i] = mixed[lo] + (mixed[hi] - mixed[lo]) * (idx - lo);
+  }
+
+  // PCM16 WAV 헤더 + 데이터
+  const bytesPerSample = 2;
+  const blockAlign = bytesPerSample; // mono
+  const dataSize = out.length * bytesPerSample;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(ab);
+  const writeStr = (off: number, s: string) => {
+    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+  };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, targetRate, true);
+  view.setUint32(28, targetRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  let off = 44;
+  for (let i = 0; i < out.length; i++) {
+    const s = Math.max(-1, Math.min(1, out[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return ab;
 }
 
 // 유틸 함수

@@ -31,9 +31,12 @@ export async function verifyAuth(
   try {
     const decoded = await adminAuth.verifyIdToken(token);
     return { uid: decoded.uid, email: decoded.email };
-  } catch {
+  } catch (error) {
+    // 실제 원인을 서버 로그로 남긴다 (Admin 초기화 실패/키 오류 등 진단용)
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("[Auth] 토큰 검증 실패:", msg);
     return NextResponse.json(
-      { error: "유효하지 않은 인증 토큰입니다." },
+      { error: "유효하지 않은 인증 토큰입니다.", detail: msg },
       { status: 401 }
     );
   }

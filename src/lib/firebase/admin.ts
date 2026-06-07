@@ -10,6 +10,25 @@ let _app: App | null = null;
 let _auth: Auth | null = null;
 let _db: Firestore | null = null;
 
+/**
+ * 환경변수로 들어온 private key를 정규화한다.
+ * - 양끝 따옴표 제거 (Netlify/Vercel 등에서 따옴표 포함해 붙여넣은 경우)
+ * - 리터럴 `\n` → 실제 줄바꿈
+ * 이 처리가 없으면 cert()가 키 파싱에 실패하고, 그 결과 모든
+ * verifyIdToken 호출이 401로 떨어진다.
+ */
+function normalizePrivateKey(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  let key = raw.trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1);
+  }
+  return key.replace(/\\n/g, "\n");
+}
+
 function getAdminApp(): App {
   if (_app) return _app;
 
@@ -20,7 +39,7 @@ function getAdminApp(): App {
 
   const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+  const privateKey = normalizePrivateKey(process.env.FIREBASE_PRIVATE_KEY);
 
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error(
