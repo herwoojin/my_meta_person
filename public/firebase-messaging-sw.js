@@ -18,7 +18,7 @@ try {
     const notificationTitle = payload.notification.title;
     const notificationOptions = {
       body: payload.notification.body,
-      icon: "/icon.png",
+      icon: "/icons/icon-192.png",
     };
 
     self.registration.showNotification(notificationTitle, notificationOptions);

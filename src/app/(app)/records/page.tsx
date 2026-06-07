@@ -30,6 +30,7 @@ interface CoachLog {
   id: string;
   query: string;
   answer: string;
+  provider?: string;
   createdAt: string;
 }
 
@@ -350,9 +351,16 @@ export default function RecordsPage() {
                       </div>
                       <div className="flex gap-2">
                         <Badge className="bg-accent/10 text-accent border-0 h-fit shrink-0">코치</Badge>
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
-                          {l.answer}
-                        </p>
+                        <div className="min-w-0">
+                          <p className="text-sm leading-relaxed whitespace-pre-wrap text-muted-foreground">
+                            {l.answer}
+                          </p>
+                          {l.provider && (
+                            <p className="text-[11px] mt-1.5 text-muted-foreground/70">
+                              🧠 {l.provider}
+                            </p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </CardContent>

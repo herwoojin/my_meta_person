@@ -21,6 +21,7 @@ interface ChatMessage {
   role: "user" | "coach";
   content: string;
   timestamp: Date;
+  provider?: string;
 }
 
 export default function CoachPage() {
@@ -72,6 +73,7 @@ export default function CoachPage() {
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let fullContent = "";
+      let usedProvider = "";
 
       if (reader) {
         while (true) {
@@ -87,6 +89,7 @@ export default function CoachPage() {
               if (data === "[DONE]") continue;
               try {
                 const parsed = JSON.parse(data);
+                if (parsed.provider) usedProvider = parsed.provider;
                 if (parsed.text) {
                   fullContent += parsed.text;
                   setStreamingContent(fullContent);
@@ -104,6 +107,7 @@ export default function CoachPage() {
         role: "coach",
         content: fullContent || "응답을 생성하지 못했습니다.",
         timestamp: new Date(),
+        provider: usedProvider || undefined,
       };
       setMessages((prev) => [...prev, coachMessage]);
 
@@ -116,6 +120,7 @@ export default function CoachPage() {
           await addDoc(collection(db, "users", user.uid, "coachLogs"), {
             query: userMessage.content,
             answer: fullContent,
+            provider: usedProvider || "",
             createdAt: new Date().toISOString(),
           });
         } catch (saveErr) {
@@ -235,7 +240,12 @@ export default function CoachPage() {
                 <div className="text-sm leading-relaxed whitespace-pre-wrap">
                   {renderCoachContent(msg.content)}
                 </div>
-                <p className="text-[10px] mt-2 opacity-50">
+                {msg.role === "coach" && msg.provider && (
+                  <p className="text-[11px] mt-2 text-muted-foreground">
+                    🧠 {msg.provider}
+                  </p>
+                )}
+                <p className="text-[10px] mt-1 opacity-50">
                   {msg.timestamp.toLocaleTimeString("ko-KR", {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -283,7 +293,7 @@ export default function CoachPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="고민이나 질문을 입력하세요..."
+              placeholder="고민이나 질문을 입력하세요...  ( /모두 로 시작하면 모든 모델이 종합 답변 )"
               className="min-h-[44px] max-h-[120px] bg-transparent border-0 resize-none focus-visible:ring-0 px-3 py-2.5 text-sm"
               disabled={isStreaming}
             />

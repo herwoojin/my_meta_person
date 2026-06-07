@@ -17,8 +17,10 @@ export interface UserProfile {
   timezone: string;
   notifyPrefs: NotifyPrefs;
   onboardingComplete: boolean;
-  /** 사용자 본인의 Gemini API 키 (BYOK). Firestore 규칙상 본인만 읽기/쓰기. */
+  /** 사용자 본인의 API 키 (BYOK). Firestore 규칙상 본인만 읽기/쓰기. */
   geminiApiKey?: string;
+  openaiApiKey?: string;
+  anthropicApiKey?: string;
   createdAt: Timestamp;
 }
 

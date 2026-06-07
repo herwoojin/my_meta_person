@@ -22,6 +22,7 @@ export async function GET(req: NextRequest) {
           id: doc.id,
           query: (data.query as string) ?? "",
           answer: (data.answer as string) ?? "",
+          provider: (data.provider as string) ?? "",
           createdAt: (data.createdAt as string) ?? "",
         };
       })
