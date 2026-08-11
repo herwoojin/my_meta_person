@@ -6,6 +6,32 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAuth, isAuthError } from "@/lib/auth/verify";
 import { adminDb } from "@/lib/firebase/admin";
 
+/**
+ * entries 서브컬렉션으로부터 mdSnapshot을 다시 만들어 저장합니다.
+ * (수정·삭제처럼 단순 append로 처리할 수 없는 경우에 사용)
+ */
+async function rebuildSnapshot(uid: string, dateKey: string): Promise<string> {
+  const journalRef = adminDb.doc(`users/${uid}/journals/${dateKey}`);
+  const entriesSnap = await journalRef
+    .collection("entries")
+    .orderBy("createdAt", "asc")
+    .get();
+
+  const md = entriesSnap.docs
+    .map((doc) => {
+      const d = doc.data();
+      return `## ${d.time}\n${d.text}\n\n`;
+    })
+    .join("");
+
+  await journalRef.set(
+    { dateKey, mdSnapshot: md, updatedAt: new Date().toISOString() },
+    { merge: true }
+  );
+
+  return md;
+}
+
 // GET — 특정 날짜의 일기 조회
 export async function GET(req: NextRequest) {
   const authResult = await verifyAuth(req);
@@ -59,7 +85,7 @@ export async function POST(req: NextRequest) {
   const { uid } = authResult;
 
   try {
-    const { dateKey, time, text, source } = await req.json();
+    const { dateKey, time, text, source, rawText } = await req.json();
 
     if (!dateKey || !time || !text || !source) {
       return NextResponse.json(
@@ -77,6 +103,8 @@ export async function POST(req: NextRequest) {
       time,
       text,
       source,
+      // 교정 전 받아쓰기 원문 (교정으로 뜻이 바뀐 경우 되돌릴 수 있게 보관)
+      ...(rawText && rawText !== text ? { rawText } : {}),
       createdAt: new Date().toISOString(),
     });
 
@@ -105,18 +133,84 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// DELETE — 특정 날짜의 일기 전체 삭제 (?date=YYYY-MM-DD) — entries 서브컬렉션 포함
+// PATCH — 기존 일기 항목의 본문 수정 (받아쓰기 오인식 교정용)
+export async function PATCH(req: NextRequest) {
+  const authResult = await verifyAuth(req);
+  if (isAuthError(authResult)) return authResult;
+  const { uid } = authResult;
+
+  try {
+    const { dateKey, id, text } = await req.json();
+
+    if (!dateKey || !id || typeof text !== "string" || !text.trim()) {
+      return NextResponse.json(
+        { error: "필수 데이터(dateKey, id, text)가 누락되었습니다." },
+        { status: 400 }
+      );
+    }
+
+    const entryRef = adminDb.doc(
+      `users/${uid}/journals/${dateKey}/entries/${id}`
+    );
+    const entrySnap = await entryRef.get();
+    if (!entrySnap.exists) {
+      return NextResponse.json(
+        { error: "해당 기록을 찾을 수 없습니다." },
+        { status: 404 }
+      );
+    }
+
+    await entryRef.set(
+      {
+        text: text.trim(),
+        edited: true,
+        editedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+
+    await rebuildSnapshot(uid, dateKey);
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[Journal] 수정 실패:", error);
+    return NextResponse.json(
+      { error: "일기 수정에 실패했습니다." },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE — 날짜 전체 삭제 (?date=YYYY-MM-DD) 또는 항목 하나 삭제 (&entry=<id>)
 export async function DELETE(req: NextRequest) {
   const authResult = await verifyAuth(req);
   if (isAuthError(authResult)) return authResult;
   const { uid } = authResult;
 
   const dateKey = req.nextUrl.searchParams.get("date");
+  const entryId = req.nextUrl.searchParams.get("entry");
   if (!dateKey) {
     return NextResponse.json(
       { error: "날짜(date) 파라미터가 필요합니다." },
       { status: 400 }
     );
+  }
+
+  // 항목 하나만 삭제
+  if (entryId) {
+    try {
+      await adminDb
+        .doc(`users/${uid}/journals/${dateKey}/entries/${entryId}`)
+        .delete();
+      await rebuildSnapshot(uid, dateKey);
+      return NextResponse.json({ success: true });
+    } catch (error) {
+      console.error("[Journal] 항목 삭제 실패:", error);
+      return NextResponse.json(
+        { error: "기록 삭제에 실패했습니다." },
+        { status: 500 }
+      );
+    }
   }
 
   try {

@@ -19,6 +19,11 @@ import {
   FileText,
   Loader2,
   Keyboard,
+  Pencil,
+  Trash2,
+  Check,
+  X,
+  Sparkles,
 } from "lucide-react";
 
 interface Entry {
@@ -26,6 +31,10 @@ interface Entry {
   time: string;
   text: string;
   source: "voice" | "text";
+  /** 교정 전 받아쓰기 원문 (교정된 경우에만 존재) */
+  rawText?: string;
+  /** 사용자가 직접 수정한 기록 */
+  edited?: boolean;
 }
 
 export default function JournalPage() {
@@ -38,6 +47,12 @@ export default function JournalPage() {
   const [showTextInput, setShowTextInput] = useState(false);
   const [textInput, setTextInput] = useState("");
   const [recordingTime, setRecordingTime] = useState(0);
+  // 편집 상태
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
+  const [rawShownId, setRawShownId] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -73,21 +88,125 @@ export default function JournalPage() {
     fetchEntries();
   }, [dateKey, user]);
 
-  // DB에 단일 항목 저장
-  const saveEntry = async (time: string, text: string, source: "voice" | "text") => {
-    if (!user) return;
+  // DB에 단일 항목 저장. 저장된 문서 id를 돌려준다(이후 수정·삭제에 사용)
+  const saveEntry = async (entry: Entry): Promise<string | null> => {
+    if (!user) return null;
     try {
       const token = await user.getIdToken();
-      await fetch("/api/journal", {
+      const res = await fetch("/api/journal", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ dateKey, time, text, source }),
+        body: JSON.stringify({
+          dateKey,
+          time: entry.time,
+          text: entry.text,
+          source: entry.source,
+          rawText: entry.rawText,
+        }),
       });
+      const data = await res.json();
+      return res.ok ? (data.id ?? null) : null;
     } catch (error) {
       console.error("일기 저장 실패:", error);
+      return null;
+    }
+  };
+
+  // 저장 직후 임시 id를 서버 문서 id로 교체
+  const attachServerId = (localId: string, serverId: string | null) => {
+    if (!serverId) return;
+    setEntries((prev) =>
+      prev.map((e) => (e.id === localId ? { ...e, id: serverId } : e))
+    );
+  };
+
+  // --- 편집 ---
+  const startEdit = (entry: Entry) => {
+    setEditingId(entry.id);
+    setEditText(entry.text);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
+  };
+
+  // 편집 중인 텍스트를 AI로 다시 다듬기 (저장은 사용자가 확인 후)
+  const refineEditText = async () => {
+    if (!user || !editText.trim()) return;
+    setIsRefining(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch("/api/refine", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: editText, dateKey }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error);
+      if (data.text) setEditText(data.text);
+      if (!data.changed) alert("고칠 부분을 찾지 못했습니다.");
+    } catch (error) {
+      console.error("교정 실패:", error);
+      alert("교정에 실패했습니다. 잠시 후 다시 시도해주세요.");
+    } finally {
+      setIsRefining(false);
+    }
+  };
+
+  const saveEdit = async (entry: Entry) => {
+    const text = editText.trim();
+    if (!user || !text || text === entry.text) {
+      cancelEdit();
+      return;
+    }
+    setIsSavingEdit(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch("/api/journal", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ dateKey, id: entry.id, text }),
+      });
+      if (!res.ok) throw new Error();
+      setEntries((prev) =>
+        prev.map((e) => (e.id === entry.id ? { ...e, text, edited: true } : e))
+      );
+      cancelEdit();
+    } catch (error) {
+      console.error("수정 실패:", error);
+      alert("수정 저장에 실패했습니다.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const deleteEntry = async (entry: Entry) => {
+    if (!user) return;
+    if (!confirm("이 기록을 삭제할까요? 되돌릴 수 없습니다.")) return;
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch(
+        `/api/journal?date=${dateKey}&entry=${entry.id}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (!res.ok) throw new Error();
+      setEntries((prev) => prev.filter((e) => e.id !== entry.id));
+    } catch (error) {
+      console.error("삭제 실패:", error);
+      alert("삭제에 실패했습니다.");
     }
   };
 
@@ -181,11 +300,14 @@ export default function JournalPage() {
       const newEntry: Entry = {
         id: Date.now().toString(),
         time: data.time || getCurrentTime(),
+        // 서버에서 문맥 교정을 마친 텍스트
         text: data.text,
         source: "voice",
+        // 교정으로 달라진 경우에만 받아쓰기 원문 보관
+        rawText: data.refined ? data.rawText : undefined,
       };
       setEntries((prev) => [...prev, newEntry]);
-      await saveEntry(newEntry.time, newEntry.text, newEntry.source);
+      attachServerId(newEntry.id, await saveEntry(newEntry));
     } catch (error) {
       console.error("변환 오류:", error);
       const msg = error instanceof Error ? error.message : "";
@@ -211,7 +333,7 @@ export default function JournalPage() {
     setEntries((prev) => [...prev, newEntry]);
     setTextInput("");
     setShowTextInput(false);
-    await saveEntry(newEntry.time, newEntry.text, newEntry.source);
+    attachServerId(newEntry.id, await saveEntry(newEntry));
   };
 
   // MD 내보내기
@@ -330,8 +452,122 @@ export default function JournalPage() {
                     >
                       {entry.source === "voice" ? "🎙️ 음성" : "⌨️ 텍스트"}
                     </Badge>
+                    {entry.edited && (
+                      <Badge variant="outline" className="text-xs border-muted-foreground/30">
+                        ✏️ 수정됨
+                      </Badge>
+                    )}
+
+                    {editingId !== entry.id && (
+                      <div className="ml-auto flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(entry)}
+                          className="text-muted-foreground hover:text-foreground p-1"
+                          aria-label="수정"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => deleteEntry(entry)}
+                          className="text-muted-foreground hover:text-destructive p-1"
+                          aria-label="삭제"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{entry.text}</p>
+
+                  {editingId === entry.id ? (
+                    <div className="space-y-2">
+                      <Textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        className="min-h-[120px] text-sm leading-relaxed rounded-xl bg-muted/20"
+                        autoFocus
+                      />
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={refineEditText}
+                          disabled={isRefining || isSavingEdit}
+                          className="rounded-xl"
+                        >
+                          {isRefining ? (
+                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3 h-3 mr-1" />
+                          )}
+                          AI 교정
+                        </Button>
+                        {entry.rawText && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setEditText(entry.rawText ?? "")}
+                            disabled={isRefining || isSavingEdit}
+                            className="rounded-xl text-muted-foreground"
+                          >
+                            원문 불러오기
+                          </Button>
+                        )}
+                        <div className="ml-auto flex gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={cancelEdit}
+                            disabled={isSavingEdit}
+                            className="rounded-xl"
+                          >
+                            <X className="w-3 h-3 mr-1" />
+                            취소
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => saveEdit(entry)}
+                            disabled={isSavingEdit || !editText.trim()}
+                            className="rounded-xl"
+                          >
+                            {isSavingEdit ? (
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                            ) : (
+                              <Check className="w-3 h-3 mr-1" />
+                            )}
+                            저장
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p
+                        className="text-sm leading-relaxed whitespace-pre-wrap cursor-text"
+                        onDoubleClick={() => startEdit(entry)}
+                      >
+                        {entry.text}
+                      </p>
+                      {entry.rawText && (
+                        <div className="mt-2">
+                          <button
+                            onClick={() =>
+                              setRawShownId(rawShownId === entry.id ? null : entry.id)
+                            }
+                            className="text-[11px] text-muted-foreground/70 hover:text-muted-foreground"
+                          >
+                            {rawShownId === entry.id
+                              ? "받아쓰기 원문 숨기기"
+                              : "받아쓰기 원문 보기"}
+                          </button>
+                          {rawShownId === entry.id && (
+                            <p className="mt-1.5 text-xs leading-relaxed whitespace-pre-wrap text-muted-foreground/80 p-3 rounded-xl bg-muted/20">
+                              {entry.rawText}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
                 </CardContent>
               </Card>
             ))
